@@ -19,6 +19,7 @@ import '../core/emby_library.dart';
 import '../core/cms_parser.dart';
 import '../core/app_update.dart';
 import '../core/csp_bridge.dart';
+import '../core/douban_feed.dart';
 import '../core/download_service.dart';
 import '../core/models.dart';
 import '../core/netdisk_service.dart';
@@ -190,6 +191,12 @@ class _AdaptiveShellState extends State<AdaptiveShell>
   int _homeEpoch = 0;
   int _categoryEpoch = 0;
   bool _autoPagingScheduled = false;
+  // 首页推荐来源 = 豆瓣热播时的榜单状态
+  List<DoubanFeedItem> _doubanItems = const [];
+  bool _doubanLoading = false;
+  String? _doubanError;
+  String _doubanCategory = '热门';
+  int _doubanEpoch = 0;
   Completer<void>? _homeAbort;
   Completer<void>? _categoryAbort;
   Completer<void>? _liveAbort;
@@ -276,6 +283,11 @@ class _AdaptiveShellState extends State<AdaptiveShell>
       unawaited(windowManager.setPreventClose(true));
     }
     unawaited(_loadInstalledVersion());
+    if (widget.storage.homeFeedMode == 'douban') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_loadDoubanHome());
+      });
+    }
     GlassworkBackdrop.reduceTransparency.value =
         widget.storage.glassBlurLevel == 'solid' ||
             widget.storage.glassBlurStrength <= 0.02;
@@ -652,6 +664,265 @@ class _AdaptiveShellState extends State<AdaptiveShell>
     }
     if (mounted) setState(() {});
   }
+  bool get _isDoubanHome => widget.storage.homeFeedMode == 'douban';
+
+  Future<void> _loadDoubanHome({String? category, bool force = false}) async {
+    final target = category ?? _doubanCategory;
+    final epoch = ++_doubanEpoch;
+    final hit = force ? null : DoubanFeed.cached(target);
+    if (hit != null) {
+      if (!mounted || epoch != _doubanEpoch) return;
+      setState(() {
+        _doubanCategory = target;
+        _doubanItems = hit;
+        _doubanLoading = false;
+        _doubanError = null;
+      });
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _doubanCategory = target;
+        _doubanLoading = true;
+        _doubanError = null;
+      });
+    }
+    try {
+      final items = await DoubanFeed.fetch(target, force: true);
+      if (!mounted || epoch != _doubanEpoch) return;
+      setState(() {
+        _doubanItems = items;
+        _doubanLoading = false;
+        _doubanError = items.isEmpty ? '豆瓣榜单返回为空，请稍后重试' : null;
+      });
+    } catch (_) {
+      if (!mounted || epoch != _doubanEpoch) return;
+      setState(() {
+        _doubanItems = const [];
+        _doubanLoading = false;
+        _doubanError = '豆瓣榜单加载失败，请检查网络后重试';
+      });
+    }
+  }
+
+  Widget _buildDoubanCategoryChips(double horizontalPad) {
+    return SizedBox(
+      height: 38,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.symmetric(horizontal: horizontalPad),
+        itemCount: DoubanFeed.categories.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 8),
+        itemBuilder: (context, i) {
+          final name = DoubanFeed.categories[i];
+          final active = name == _doubanCategory;
+          return GestureDetector(
+            onTap: () {
+              if (active) return;
+              unawaited(_loadDoubanHome(category: name));
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              padding: const EdgeInsets.symmetric(horizontal: 15),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: active ? AppleColors.systemBlue : const Color(0x1FFFFFFF),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(
+                  color: active ? AppleColors.systemBlue : const Color(0x33FFFFFF),
+                  width: 0.8,
+                ),
+              ),
+              child: Text(
+                name,
+                style: TextStyle(
+                  color: active ? const Color(0xFF0B0B0F) : AppleColors.labelPrimary,
+                  fontSize: 13.5,
+                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildDoubanCard(DoubanFeedItem item) {
+    return GestureDetector(
+      onTap: () {
+        _searchController.text = item.title;
+        unawaited(_runGlobalSearch(item.title));
+        _showGlobalSearchSheet();
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  PosterImage(
+                    url: item.cover,
+                    title: item.title,
+                    placeholder: _buildPosterPlaceholder(),
+                  ),
+                  if (item.rate > 0)
+                    Positioned(
+                      left: 6,
+                      top: 6,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xC8000000),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          item.rate.toStringAsFixed(1),
+                          style: const TextStyle(
+                            color: Color(0xFF52D97B),
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            item.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: AppleColors.labelPrimary,
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDoubanHomeScroll(BuildContext context, double horizontalPad, bool useSidebar) {
+    if (_doubanItems.isEmpty && !_doubanLoading && _doubanError == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _doubanItems.isEmpty && !_doubanLoading && _doubanError == null) {
+          unawaited(_loadDoubanHome());
+        }
+      });
+    }
+    final topPad = MediaQuery.of(context).padding.top;
+    return CustomScrollView(
+      physics: const BouncingScrollPhysics(parent: AlwaysScrollableScrollPhysics()),
+      slivers: [
+        SliverPadding(
+          padding: EdgeInsets.only(top: topPad + 14, left: horizontalPad, right: horizontalPad),
+          sliver: SliverToBoxAdapter(
+            child: Row(
+              children: [
+                const Text(
+                  '豆瓣热播',
+                  style: TextStyle(
+                    color: AppleColors.labelPrimary,
+                    fontSize: 21,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.4,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                GestureDetector(
+                  onTap: () => unawaited(_loadDoubanHome(force: true)),
+                  child: const Icon(
+                    CupertinoIcons.refresh,
+                    color: AppleColors.labelSecondary,
+                    size: 17,
+                  ),
+                ),
+                const Spacer(),
+                const Icon(
+                  CupertinoIcons.chart_bar_alt_fill,
+                  color: Color(0xFF52D97B),
+                  size: 15,
+                ),
+                const SizedBox(width: 4),
+                const Text(
+                  '数据来自豆瓣',
+                  style: TextStyle(color: AppleColors.labelSecondary, fontSize: 11.5),
+                ),
+              ],
+            ),
+          ),
+        ),
+        SliverToBoxAdapter(child: const SizedBox(height: 12)),
+        SliverToBoxAdapter(child: _buildDoubanCategoryChips(horizontalPad)),
+        SliverToBoxAdapter(child: const SizedBox(height: 10)),
+        if (_doubanError != null)
+          SliverFillRemaining(
+            hasScrollBody: false,
+            child: Padding(
+              padding: const EdgeInsets.all(28),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _doubanError!,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(color: AppleColors.labelSecondary, fontSize: 14),
+                    ),
+                    const SizedBox(height: 14),
+                    AppleCapsuleButton(
+                      label: '重新加载',
+                      icon: CupertinoIcons.refresh,
+                      primary: true,
+                      compact: true,
+                      onPressed: () => unawaited(_loadDoubanHome(force: true)),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else if (_doubanLoading && _doubanItems.isEmpty)
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.symmetric(vertical: 80),
+              child: Center(child: CupertinoActivityIndicator(radius: 13)),
+            ),
+          )
+        else
+          SliverPadding(
+            padding: EdgeInsets.symmetric(horizontal: horizontalPad, vertical: 4),
+            sliver: SliverGrid(
+              gridDelegate: SliverGridDelegateWithMaxCrossAxisExtent(
+                maxCrossAxisExtent: switch (widget.storage.gridDensity) {
+                  'comfortable' => useSidebar ? 210 : 162,
+                  'compact' => useSidebar ? 148 : 108,
+                  _ => useSidebar ? 176 : 132,
+                },
+                mainAxisSpacing: 16,
+                crossAxisSpacing: 12,
+                childAspectRatio: 0.56,
+              ),
+              delegate: SliverChildBuilderDelegate(
+                (context, index) => _buildDoubanCard(_doubanItems[index]),
+                childCount: _doubanItems.length,
+              ),
+            ),
+          ),
+        SliverToBoxAdapter(
+          child: SizedBox(height: useSidebar ? 32 : 128),
+        ),
+      ],
+    );
+  }
+
   Future<void> _loadSiteHome() async {
     final site = _activeSite;
     if (site == null) return;
@@ -1410,7 +1681,9 @@ class _AdaptiveShellState extends State<AdaptiveShell>
           final s1 = ((topSafePad * 0.35) / maxH).clamp(0.008, 0.045);
           final s2 = ((topSafePad * 0.78) / maxH).clamp(0.020, 0.085);
           final s3 = ((topSafePad + 16.0) / maxH).clamp(0.038, 0.13);
-          final homeScrollView = CustomScrollView(
+          final homeScrollView = _isDoubanHome
+              ? _buildDoubanHomeScroll(context, horizontalPad, useSidebar)
+              : CustomScrollView(
               physics: const BouncingScrollPhysics(
                 parent: AlwaysScrollableScrollPhysics(),
               ),
@@ -1810,7 +2083,9 @@ class _AdaptiveShellState extends State<AdaptiveShell>
               ),
             ),
           ),
-          if (_activeSite != null) ...[
+          if (_activeSite != null &&
+              widget.storage.homeFeedMode != 'douban' &&
+              widget.storage.homeFeedMode != 'history') ...[
             if (_homeError != null)
               SliverFillRemaining(
                 hasScrollBody: false,
@@ -7393,6 +7668,38 @@ class _AdaptiveShellState extends State<AdaptiveShell>
               ],
               onSelected: (val) async {
                 await widget.storage.setCardSubtitleMode(val);
+                refreshBoth();
+              },
+            ),
+          ],
+        ),
+        const SizedBox(height: 22),
+        AppleGroupedSection(
+          header: '首页推荐内容来源',
+          children: [
+            _buildExpandableChoiceDrawerTile<String>(
+              settingKey: 'home_feed_mode',
+              icon: CupertinoIcons.square_stack_3d_up_fill,
+              iconBgColor: AppleColors.systemGreen,
+              title: '首页推荐数据来源',
+              subtitle: '与影视仓一致的三档：站点推荐、豆瓣热播、观看历史',
+              trailingText: switch (widget.storage.homeFeedMode) {
+                'douban' => '豆瓣热播',
+                'history' => '观看历史',
+                _ => '站点推荐',
+              },
+              currentValue: widget.storage.homeFeedMode,
+              onStateChanged: refreshBoth,
+              options: const [
+                ('site', '站点推荐', '展示当前片源首页自带的推荐片单，最贴合影视仓「站点推荐」'),
+                ('douban', '豆瓣热播', '展示豆瓣热播榜单，可按热门/电影/电视剧等分类切换'),
+                ('history', '观看历史', '首页只保留最近观看记录，不加载站点推荐片单'),
+              ],
+              onSelected: (val) async {
+                await widget.storage.setHomeFeedMode(val);
+                if (val == 'douban') {
+                  unawaited(_loadDoubanHome(force: true));
+                }
                 refreshBoth();
               },
             ),

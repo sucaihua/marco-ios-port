@@ -70,6 +70,7 @@ class StorageService {
   static const String keyGridDensity = 'grid_density';
   static const String keyShowHeroBanner = 'show_hero_banner';
   static const String keyShowContinueWatching = 'show_continue_watching';
+  static const String keyHomeFeedMode = 'home_feed_mode';
   static const String keyCardSubtitleMode = 'card_subtitle_mode';
   static const String keyPreferredQuality = 'preferred_quality';
   static const String keyDefaultAspectMode = 'default_aspect_mode';
@@ -688,6 +689,8 @@ class StorageService {
   bool get showHeroBanner => _prefs.getBool(keyShowHeroBanner) ?? true;
   bool get showContinueWatching =>
       _prefs.getBool(keyShowContinueWatching) ?? true;
+  /// 首页推荐内容来源：site=站点推荐，douban=豆瓣热播，history=观看历史。
+  String get homeFeedMode => _prefs.getString(keyHomeFeedMode) ?? 'site';
   String get cardSubtitleMode =>
       _prefs.getString(keyCardSubtitleMode) ?? 'remarks';
   String get preferredQuality =>
@@ -2185,6 +2188,9 @@ class StorageService {
   Future<void> setShowContinueWatching(bool show) async {
     await _prefs.setBool(keyShowContinueWatching, show);
   }
+  Future<void> setHomeFeedMode(String mode) async {
+    await _prefs.setString(keyHomeFeedMode, mode.trim());
+  }
   Future<void> setCardSubtitleMode(String mode) async {
     await _prefs.setString(keyCardSubtitleMode, mode.trim());
   }
@@ -2797,7 +2803,8 @@ class StorageService {
   }
 
   static const _appearanceStrings = [keyWallpaperPreset, keyGlassBlurLevel, keyGridDensity,
-    keyCardSubtitleMode, keyPreferredQuality, keyDefaultAspectMode, keyPreferredLine];
+    keyCardSubtitleMode, keyPreferredQuality, keyDefaultAspectMode, keyPreferredLine,
+    keyHomeFeedMode];
   static const _appearanceBooleans = [keyAmbientGlow, keyShowHeroBanner, keyShowContinueWatching];
 
   String exportBackupJson() {
