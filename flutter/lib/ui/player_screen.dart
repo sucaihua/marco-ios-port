@@ -472,6 +472,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         } else if (!_isLiveStream &&
             !_loading &&
             !_userSelectedQuality &&
+            !widget.storage.lockQuality &&
             _startup.isPastStartupWindow &&
             _position.inMilliseconds >= 2500 &&
             _nextFallbackQuality() != null) {
@@ -659,7 +660,7 @@ class _PlayerScreenState extends State<PlayerScreen>
     final decision = PlaybackRecoveryPolicy.decide(
       episode: _currentEpisode,
       isTrial: isTrial,
-      hasNextQuality: nextVariant != null,
+      hasNextQuality: nextVariant != null && !widget.storage.lockQuality,
     );
     if (decision == PlaybackRecoveryDecision.nextQuality) {
       _showHud(
@@ -720,6 +721,7 @@ class _PlayerScreenState extends State<PlayerScreen>
         session != _playSession ||
         !_allowEvents ||
         _isLiveStream ||
+        widget.storage.lockQuality ||
         _userSelectedQuality) {
       return;
     }
@@ -1032,7 +1034,7 @@ class _PlayerScreenState extends State<PlayerScreen>
             ? (_currentLine.episodes.length > 1 &&
                 _failedLiveEpisodes.length <
                     math.min(_currentLine.episodes.length - 1, 4))
-            : (_nextFallbackQuality() != null ||
+            : ((_nextFallbackQuality() != null && !widget.storage.lockQuality) ||
                 (PlaybackRecoveryPolicy.decide(
                           episode: _currentEpisode,
                           isTrial: false,

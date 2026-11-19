@@ -7773,6 +7773,20 @@ class _AdaptiveShellState extends State<AdaptiveShell>
                 refreshBoth();
               },
             ),
+            AppleGroupedTile(
+              icon: CupertinoIcons.lock_fill,
+              iconBgColor: AppleColors.systemOrange,
+              title: '播放不自动切换画质',
+              subtitle: '开启后卡顿或起播失败时保持当前清晰度，只切线路不降画质',
+              trailing: CupertinoSwitch(
+                value: widget.storage.lockQuality,
+                activeTrackColor: AppleColors.systemGreen,
+                onChanged: (v) async {
+                  await widget.storage.setLockQuality(v);
+                  refreshBoth();
+                },
+              ),
+            ),
             _buildExpandableChoiceDrawerTile<String>(
               settingKey: 'player_kernel',
               icon: CupertinoIcons.slider_horizontal_3,
