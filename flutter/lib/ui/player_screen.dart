@@ -1468,6 +1468,14 @@ class _PlayerScreenState extends State<PlayerScreen>
         'cache-pause-wait',
         _isLiveStream ? '1' : (kernel == 'mpv' ? '5' : '4'),
       );
+      if (Platform.isIOS) {
+        // iOS 没有独立显卡通路：4K HEVC 必须走 VideoToolbox 硬解，
+        // 并开启 direct rendering + 多线程解码，否则 4K 起播极慢或直接超时。
+        await dyn.setProperty('hwdec', 'videotoolbox');
+        await dyn.setProperty('vd-lavc-threads', '0');
+        await dyn.setProperty('vd-lavc-dr', 'yes');
+        await dyn.setProperty('demuxer-lavc-threads', '4');
+      }
       if (Platform.isWindows) {
         await dyn.setProperty('vd-lavc-threads', '0');
         await dyn.setProperty('vd-lavc-dr', 'yes');
@@ -1529,19 +1537,24 @@ class _PlayerScreenState extends State<PlayerScreen>
             'demuxer-max-bytes',
             (Platform.isWindows || Platform.isLinux)
                 ? '268435456'
-                : (Platform.isMacOS
+                : (Platform.isIOS
                       ? '134217728'
-                      : (Platform.isIOS ? '33554432' : '67108864')),
+                      : (Platform.isMacOS ? '134217728' : '67108864')),
           );
           await dyn.setProperty(
             'demuxer-max-back-bytes',
-            _desktop ? '67108864' : '16777216',
+            _desktop
+                ? '67108864'
+                : (Platform.isIOS ? '33554432' : '16777216'),
           );
           await dyn.setProperty(
             'demuxer-readahead-secs',
-            _desktop ? '45' : '20',
+            _desktop ? '45' : (Platform.isIOS ? '45' : '20'),
           );
-          await dyn.setProperty('network-timeout', '20');
+          await dyn.setProperty(
+            'network-timeout',
+            Platform.isIOS ? '30' : '20',
+          );
           await dyn.setProperty(
             'demuxer-lavf-o',
             '$_baseLavfOptions,reconnect=1,reconnect_delay_max=4',
