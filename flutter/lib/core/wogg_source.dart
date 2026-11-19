@@ -929,31 +929,24 @@ class WoggPluginConfiguration {
       );
     }
 
-    if (profile == null) {
-      final native = member(
-        outerArchive,
-        'assets/ftyguard_v8.so',
-        onMissing: '此版本玩偶插件尚未完成适配，请保留原订阅并更新应用',
-      );
-      final nativeSha = sha256.convert(native).toString();
-      if (native.length != _ftyNativeSize ||
-          !_ftyNativeShas.contains(nativeSha)) {
-        throw const FormatException('此版本玩偶插件尚未完成适配，请保留原订阅并更新应用');
-      }
-    }
+    // 未知插件版本：不执行任何字节码，仅允许纯数据解析兜底，因此原生库校验
+// 失败不再直接拒绝（下方兜底仍会做结构校验）。
 
-    final payload = member(outerArchive, 'assets/ftyshinidie.guard');
-    for (var i = 0; i < payload.length; i++) {
-      if (const [1, 2, 5, 6].contains(payload[i])) payload[i] ^= 7;
-    }
-    final Archive innerArchive;
+    Uint8List? dex;
     try {
-      innerArchive = ZipDecoder().decodeBytes(payload, verify: true);
-    } catch (_) {
-      throw const FormatException('玩偶插件结构无效');
+      final payload = member(outerArchive, 'assets/ftyshinidie.guard');
+      for (var i = 0; i < payload.length; i++) {
+        if (const [1, 2, 5, 6].contains(payload[i])) payload[i] ^= 7;
+      }
+      final innerArchive = ZipDecoder().decodeBytes(payload, verify: true);
+      dex = member(innerArchive, 'classes.dex');
+    } catch (e) {
+      if (profile != null) {
+        throw const FormatException('玩偶插件结构无效');
+      }
+      dex = null;
     }
-    final dex = member(innerArchive, 'classes.dex');
-    if (profile != null) {
+    if (profile != null && dex != null) {
       if (sha256.convert(dex).toString() != profile.dex) {
         throw const FormatException('玩偶插件数据校验失败');
       }
@@ -977,8 +970,45 @@ class WoggPluginConfiguration {
         userAgent: decode(43, 111, profile.uaMask),
       );
     }
-    return extractFromDex(dex);
+    if (dex != null) {
+      try {
+        return extractFromDex(dex);
+      } catch (_) {/* 已知版本结构解析失败，继续走字符串兜底 */}
+      try {
+        return _heuristicFromDex(dex);
+      } catch (_) {/* 兜底失败，使用整包扫描 */}
+    }
+    return _heuristicFromBytes(bytes);
   }
+
+  /// 未知插件版本的纯数据兜底：只在字节里找 http(s) 站点地址与 UA，
+  /// 不执行任何代码。找不到就抛出统一的「尚未完成适配」提示。
+  static WoggPluginConfiguration _heuristicFromBytes(Uint8List bytes) {
+    final text = latin1.decode(bytes, allowInvalid: true);
+    final origins = <String>[];
+    final urlRe = RegExp(r'https?://[A-Za-z0-9._~:/?#\[\]@!$&*+,;=%-]{3,200}');
+    for (final m in urlRe.allMatches(text)) {
+      final uri = Uri.tryParse(m.group(0)!);
+      if (uri == null || uri.host.isEmpty) continue;
+      if (uri.userInfo.isNotEmpty || uri.hasQuery || uri.hasFragment) continue;
+      if (uri.path.isNotEmpty && uri.path != '/') continue;
+      final origin = '${uri.scheme}://${uri.host}/';
+      if (!origins.contains(origin)) origins.add(origin);
+      if (origins.length >= 16) break;
+    }
+    var userAgent = 'Mozilla/5.0';
+    final uaMatch = RegExp(r'Mozilla/5\.0[ -~]{0,200}').firstMatch(text);
+    if (uaMatch != null && uaMatch.group(0)!.length <= 512) {
+      userAgent = uaMatch.group(0)!;
+    }
+    if (origins.isEmpty) {
+      throw const FormatException('此版本玩偶插件尚未完成适配，请保留原订阅并更新应用');
+    }
+    return _validatedConfiguration(origins: origins, userAgent: userAgent);
+  }
+
+  static WoggPluginConfiguration _heuristicFromDex(Uint8List dex) =>
+      _heuristicFromBytes(dex);
 
   static WoggPluginConfiguration _validatedConfiguration({
     required List<String> origins,
